@@ -1,0 +1,10 @@
+spacecraft:
+pos: [0.999, 0, 0]          # Earth x + r_orbit
+vel: [0, 6.17471, 0]
+mass: 0
+
+integrator: rk4
+gravity_model:
+  type: quadratic
+  G: 39.478418
+  tensor_path: traj.pt

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simply"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy"
+]
+
+[tool.setuptools.packages.find]
+include = ["simply*"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+    "mypy",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests that call external APIs (deselect with -m 'not integration')",
+]
+testpaths = ["tests"]

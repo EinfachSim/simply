@@ -1,0 +1,48 @@
+celestial_bodies:
+  sun:
+    pos: [0, 0, 0]
+    vel: [0, 0, 0]
+    mass: 1.0
+    radius: 0.00465047
+    color: orange
+
+  mercury:
+    pos: [0.387, 0, 0]
+    vel: [0, 10.100, 0]
+    mass: 0.0000001652
+    radius: 0.0000163
+    color: "#b5b5b5"
+
+  venus:
+    pos: [0.723, 0, 0]
+    vel: [0, 7.385, 0]
+    mass: 0.000002448
+    radius: 0.0000404
+    color: "#e8cda0"
+
+  earth:
+    pos: [1.0, 0, 0]
+    vel: [0, 6.283185, 0]
+    mass: 0.000003003
+    radius: 0.0000426
+    color: "#4B9CD3"
+
+  moon:
+    pos: [1.00256810, 0, 0]
+    vel: [0, 6.498580, 0]
+    mass: 0.0000000000369
+    radius: 0.0000116
+    color: "#aaaaaa"
+
+  mars:
+    pos: [1.524, 0, 0]
+    vel: [0, 5.091, 0]
+    mass: 0.0000003227
+    radius: 0.00002266
+    color: "#c1440e"
+
+gravity_model:
+  type: quadratic
+  G: 39.478418
+
+integrator: verlet
