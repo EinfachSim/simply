@@ -46,11 +46,10 @@ class QuadraticGravityModel(BaseGravityModel):
             raise Exception("Gravity Model cannot be called in offline mode!")
         # Pairwise displacements: R[i,j] = pos[j] - pos[i]
         R = positions[None, :, :] - positions[:, None, :]   # (N, N, 3)
-        D = torch.cdist(positions, positions)               # (N, N)
+        D = R.norm(dim=-1)            # (N, N)
 
         # Safe denominator
-        D_safe = D.clone()
-        D_safe[D == 0] = 1.0
+        D_safe = torch.where(D == 0, torch.ones_like(D), D)
 
         # Unit vectors
         D3 = D_safe[:, :, None]
@@ -62,7 +61,9 @@ class QuadraticGravityModel(BaseGravityModel):
 
         # Zero diagonal, overlapping pairs
         R_sum = self.radii[:, None] + self.radii[None, :]
-        F[(D == 0) | (D < R_sum)] = 0.0
+        
+        overlap = (D == 0) | (D < R_sum)
+        F = torch.where(overlap, torch.zeros_like(F), F)
 
         # Force vectors and net force
         F_vec = F[:, :, None] * R_hat                       # (N, N, 3)
