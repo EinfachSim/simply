@@ -51,7 +51,7 @@ class SpaceCraftBody(BasePhysicalBody):
         m_dot = torch.zeros(1)
         if self.thrust_fn is not None:
             #Tsiolkovsky mass derivative
-            thrust_vec = self.thrust_fn(t)
+            thrust_vec = self.thrust_fn(t, state)
             thrust_mag = thrust_vec.norm()
             fuel_remaining = mass - self.m_dry
             m_dot = -thrust_mag / (self.v_e)

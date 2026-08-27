@@ -4,8 +4,10 @@ from simply.universe import Universe
 
 
 import torch
-def thrust_fn(t):
-    return torch.Tensor([100,100,100])
+def thrust_fn(t, state):
+    vel = state[:, 3:6].squeeze(0)
+    prograde = vel / vel.norm()
+    return 10 * prograde
 
 uni = Universe("universe.yaml")
 
