@@ -4,11 +4,11 @@ from simply.universe import Universe
 
 uni = Universe("universe.yaml")
 
-uni.simulate(0, 2, 0.00001)
+uni.simulate(0, 1, 0.01)
 
 sc = SpaceCraftBody("spacecraft.yaml")
 
-sc_states = sc.simulate(0, 2, 0.00001)
+sc_states = sc.simulate(0, 1, 0.00001)
 
 #print(sc_states.shape)
 

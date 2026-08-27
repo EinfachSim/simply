@@ -1,89 +1,129 @@
-import sys, math
+import sys, math, bisect
 import numpy as np
 import pygame
 from pygame.locals import *
 from OpenGL.GL  import *
 from OpenGL.GLU import *
-from simply.universe import Universe
 
-def animate_interactive(pt_file, sc_states=None):
 
-    try:
-        import torch
-        _to_np = lambda x: x.detach().cpu().numpy().astype(np.float64) if isinstance(x, torch.Tensor) else np.asarray(x, np.float64)
-    except ImportError:
-        _to_np = lambda x: np.asarray(x, np.float64)
+# ════════════════════════════════════════════════════════════
+#  Hermite interpolation
+#  s0, s1 : (K, 6) state arrays — columns 0:3 pos, 3:6 vel
+#  Returns interpolated positions (K, 3) at physical time t
+# ════════════════════════════════════════════════════════════
 
-    tensors = torch.load(pt_file)
+def hermite_eval(t, t0, t1, s0, s1):
+    p0, v0 = s0[:, :3], s0[:, 3:]
+    p1, v1 = s1[:, :3], s1[:, 3:]
+    dt  = t1 - t0
+    tau = (t - t0) / dt
+    h00 =  2*tau**3 - 3*tau**2 + 1
+    h10 =    tau**3 - 2*tau**2 + tau
+    h01 = -2*tau**3 + 3*tau**2
+    h11 =    tau**3 -   tau**2
+    return h00*p0 + h10*v0*dt + h01*p1 + h11*v1*dt
 
-    states = tensors["states"]
-    names  = tensors["names"]
-    radii  = tensors["radii"]
-    colors = tensors["colors"]
-    masses = tensors["masses"]
 
-    # ── Spacecraft ────────────────────────────────────────────
+def interp_planets(planet_states, planet_times, t):
+    """Return planet positions (K, 3) Hermite-interpolated at physical time t."""
+    i = bisect.bisect_right(planet_times, t) - 1
+    i = min(max(i, 0), len(planet_times) - 2)
+    return hermite_eval(t, planet_times[i], planet_times[i+1],
+                        planet_states[i], planet_states[i+1])
+
+
+# ════════════════════════════════════════════════════════════
+#  Entry point
+#
+#  pt_file   : path to traj.pt — must contain keys:
+#                states  (N_pl, K, 6)
+#                masses, radii, colors, names
+#                tspan   [tstart, tend, dt_pl]
+#
+#  sc_states : (N_sc, 6) array/tensor of spacecraft states
+#              on a finer uniform grid over the same [tstart, tend]
+#  dt_sc     : spacecraft timestep (physical units, same as dt_pl)
+# ════════════════════════════════════════════════════════════
+
+def animate_interactive(pt_file, sc_states=None, dt_sc=None):
+
+    import torch
+    _to_np = lambda x: (x.detach().cpu().numpy().astype(np.float64)
+                        if isinstance(x, torch.Tensor)
+                        else np.asarray(x, np.float64))
+
+    tensors       = torch.load(pt_file)
+    planet_states = _to_np(tensors["states"])   # (N_pl, K, 6)
+    names         = tensors["names"]
+    radii         = np.asarray(tensors["radii"], float)
+    colors        = tensors["colors"]
+    masses        = tensors["masses"]
+
+    tspan         = tensors["tspan"]
+    tstart        = float(tspan[0])
+    tend          = float(tspan[1])
+    dt_pl         = float(tspan[2])
+
+    N_pl, K = planet_states.shape[:2]
+
+    # Physical time of each planet snapshot
+    planet_times = np.linspace(tstart, tend, N_pl)
+
+    # ── Spacecraft ───────────────────────────────────────────
     if sc_states is not None:
-        sc_pos_raw = _to_np(sc_states)[:, :3].copy()   # (N', 3)
-        N_sc = len(sc_pos_raw)
+        sc_arr = _to_np(sc_states)        # (N_sc, 6)
+        sc_pos = sc_arr[:, :3]            # (N_sc, 3)
+        N_sc   = len(sc_pos)
 
-        def get_sc_pos(frame):
-            """Interpolate spacecraft position for a given planet frame index."""
-            t    = frame / max(N - 1, 1)        # normalised time in [0, 1]
-            f_sc = t * (N_sc - 1)               # float index into sc array
-            lo   = int(math.floor(f_sc))
-            hi   = min(lo + 1, N_sc - 1)
-            alpha = f_sc - lo
-            return sc_pos_raw[lo] * (1 - alpha) + sc_pos_raw[hi] * alpha
+        if dt_sc is not None:
+            sc_times = tstart + np.arange(N_sc) * float(dt_sc)
+        else:
+            sc_times = np.linspace(tstart, tend, N_sc)
+
+        print(f"Planet grid : N={N_pl}, dt={dt_pl:.4g}, t=[{tstart:.3g}, {tend:.3g}]")
+        print(f"SC grid     : N={N_sc}, dt={(sc_times[1]-sc_times[0]):.4g}, t=[{sc_times[0]:.3g}, {sc_times[-1]:.3g}]")
     else:
-        get_sc_pos = None
+        sc_pos   = None
+        sc_times = None
+        N_sc     = N_pl
 
-    for i, state in enumerate(sc_states):
-        if i % 1000 == 0:
-            earth_idx = 3
-            t = i * 0.0001
-            planet_frame_idx = round(t / 0.001)
-            earth_pos = tensors["states"][planet_frame_idx][earth_idx, :3]
-            sc_pos = state[:3]
-            diff = sc_pos - earth_pos
-            print(f"t={t:.3f} | sc={sc_pos.tolist()} | earth={earth_pos.tolist()} | diff={diff.tolist()} | dist={diff.norm():.5f}")
+    N_frames = N_sc if sc_pos is not None else N_pl
 
-    pos  = _to_np(states)[:, :, :3].copy()   # (N, K, 3)
-    N, K = pos.shape[:2]
-    radii = np.asarray(radii, float)
+    # ── Position helpers ─────────────────────────────────────
 
-    def total_energy(state, masses, G=1.0):
-        pos  = state[:, :3]
-        vel  = state[:, 3:]
-        masses = torch.tensor(masses, dtype=torch.float64)
-        KE = 0.5 * (masses * (vel**2).sum(dim=1)).sum()
-        PE = 0.0
-        K  = pos.shape[0]
-        for i in range(K):
-            for j in range(i+1, K):
-                r   = (pos[i] - pos[j]).norm()
-                PE -= G * masses[i] * masses[j] / r
-        return (KE + PE).item()
+    def sc_position(frame):
+        """Direct lookup — sc grid is the master clock."""
+        return sc_pos[frame]
 
-    print("E0 =",    total_energy(states[0],    masses))
-    print("E1 =",    total_energy(states[100],  masses))
-    print("E_end =", total_energy(states[-1],   masses))
+    def planet_position(frame):
+        """Hermite-interpolated planet positions at the physical time of sc frame."""
+        t = sc_times[frame] if sc_times is not None else planet_times[frame]
+        return interp_planets(planet_states, planet_times, t)  # (K, 3)
 
+    def planet_trail(frame, n_trail):
+        """Planet positions (trail_len, K, 3) at the sc-grid times of the trail window."""
+        f0 = max(0, frame - n_trail)
+        ts = sc_times[f0:frame + 1] if sc_times is not None else planet_times[f0:frame + 1]
+        return np.stack([interp_planets(planet_states, planet_times, t) for t in ts])
+
+    # ── Visual setup ─────────────────────────────────────────
     try:
         import matplotlib.colors as _mc
         colors = [_mc.to_rgb(c) if isinstance(c, str) else tuple(c) for c in colors]
     except ImportError:
         colors = [tuple(c) for c in colors]
 
-    span = float(max((pos.reshape(-1,3).max(0) - pos.reshape(-1,3).min(0)).max(), 1e-6))
-    ctr  = (pos.reshape(-1,3).max(0) + pos.reshape(-1,3).min(0)) / 2.0
+    all_pos = planet_states[:, :, :3].reshape(-1, 3)
+    span    = float(max((all_pos.max(0) - all_pos.min(0)).max(), 1e-6))
+    ctr     = (all_pos.max(0) + all_pos.min(0)) / 2.0
+    vis_r   = radii.copy()
 
-    # True physical radii — screen-space minimum is handled at draw time
-    vis_r = radii.copy()
-
-    TRAIL = max(50, N // 25)
-    SPEED_MIN, SPEED_MAX = 0.05, 30.0
-    MIN_SCREEN_PX = 6.0   # minimum rendered size in pixels
+    TRAIL         = max(200, N_frames // 10)
+    SPEED_MIN     = 0.5
+    SPEED_MAX     = float(max(N_frames // 10, 2))
+    MIN_SCREEN_PX = 6.0
+    SC_COL        = (0.9, 0.9, 0.2)
+    SC_R          = float(radii.min()) * 0.05
 
 
     # ════════════════════════════════════════════════════════════
@@ -101,7 +141,7 @@ def animate_interactive(pt_file, sc_states=None):
             return self.target + self.dist * np.array([
                 math.cos(pr) * math.sin(yr),
                 math.sin(pr),
-                math.cos(pr) * math.cos(yr)
+                math.cos(pr) * math.cos(yr),
             ])
 
         def look(self):
@@ -117,16 +157,16 @@ def animate_interactive(pt_file, sc_states=None):
 
         def pan(self, dx, dy):
             yr, pr = math.radians(self.yaw), math.radians(self.pitch)
-            right = np.array([ math.cos(yr), 0, -math.sin(yr)])
-            fwd   = np.array([-math.cos(pr) * math.sin(yr),
-                               math.sin(pr),
-                              -math.cos(pr) * math.cos(yr)])
-            up    = np.cross(right, -fwd)
-            s     = self.dist * 0.0012
+            right  = np.array([ math.cos(yr), 0, -math.sin(yr)])
+            fwd    = np.array([-math.cos(pr) * math.sin(yr),
+                                math.sin(pr),
+                               -math.cos(pr) * math.cos(yr)])
+            up     = np.cross(right, -fwd)
+            s      = self.dist * 0.0012
             self.target += -right * dx * s + up * dy * s
 
         def zoom(self, clicks):
-            self.dist = max(span * 0.000001, min(span * 50, self.dist * (0.88 ** clicks)))
+            self.dist = max(span * 1e-6, min(span * 50, self.dist * (0.88 ** clicks)))
 
         def reset(self):
             self.__init__()
@@ -140,15 +180,17 @@ def animate_interactive(pt_file, sc_states=None):
     def _make_sphere(stacks=18, slices=28):
         v = []
         for i in range(stacks):
-            a0, a1 = math.pi * (-0.5 + i / stacks), math.pi * (-0.5 + (i + 1) / stacks)
+            a0 = math.pi * (-0.5 + i / stacks)
+            a1 = math.pi * (-0.5 + (i + 1) / stacks)
             z0, zr0 = math.sin(a0), math.cos(a0)
             z1, zr1 = math.sin(a1), math.cos(a1)
             for j in range(slices):
-                b0, b1 = 2 * math.pi * j / slices, 2 * math.pi * (j + 1) / slices
-                v += [(zr0 * math.cos(b0), z0, zr0 * math.sin(b0)),
-                      (zr1 * math.cos(b0), z1, zr1 * math.sin(b0)),
-                      (zr1 * math.cos(b1), z1, zr1 * math.sin(b1)),
-                      (zr0 * math.cos(b1), z0, zr0 * math.sin(b1))]
+                b0 = 2 * math.pi * j / slices
+                b1 = 2 * math.pi * (j + 1) / slices
+                v += [(zr0*math.cos(b0), z0, zr0*math.sin(b0)),
+                      (zr1*math.cos(b0), z1, zr1*math.sin(b0)),
+                      (zr1*math.cos(b1), z1, zr1*math.sin(b1)),
+                      (zr0*math.cos(b1), z0, zr0*math.sin(b1))]
         return np.array(v, np.float32)
 
     _SPH = _make_sphere()
@@ -164,39 +206,49 @@ def animate_interactive(pt_file, sc_states=None):
         glDisableClientState(GL_VERTEX_ARRAY)
         glPopMatrix()
 
+    def draw_glow(x, y, z, r, col, scale, alpha):
+        glDepthMask(GL_FALSE)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        draw_sphere(x, y, z, r * scale, col, alpha)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glDepthMask(GL_TRUE)
+
+    def draw_lock_ring(x, y, z, r):
+        glPushMatrix()
+        glTranslatef(x, y, z)
+        glLineWidth(1.8)
+        glColor4f(1.0, 0.85, 0.2, 0.9)
+        glBegin(GL_LINE_LOOP)
+        for s in range(56):
+            a = 2 * math.pi * s / 56
+            glVertex3f(math.cos(a) * r, 0, math.sin(a) * r)
+        glEnd()
+        glLineWidth(1.0)
+        glPopMatrix()
+
 
     # ════════════════════════════════════════════════════════════
-    #  Screen-space radius helper
+    #  Screen-space radius
     # ════════════════════════════════════════════════════════════
     def get_screen_radius(x, y, z, world_r):
-        """Returns (use_sphere, draw_r).
-        use_sphere: True  → body is big enough to render as real sphere
-                    False → body is tiny, draw_r is inflated to MIN_SCREEN_PX
-        draw_r: world-space radius to actually draw (may be inflated)
-        """
         mv  = (GLdouble * 16)(); glGetDoublev(GL_MODELVIEW_MATRIX,  mv)
         prj = (GLdouble * 16)(); glGetDoublev(GL_PROJECTION_MATRIX, prj)
         vp  = (GLint   *  4)(); glGetIntegerv(GL_VIEWPORT,           vp)
-
         sx, sy, _ = gluProject(x, y, z, mv, prj, vp)
         ex, ey, _ = gluProject(x + world_r, y, z, mv, prj, vp)
-        screen_r  = math.hypot(ex - sx, ey - sy)   # pixels
-
+        screen_r  = math.hypot(ex - sx, ey - sy)
         if screen_r < 0.01:
-            return False, None                  # behind camera / degenerate
-
+            return False, None
         if screen_r >= MIN_SCREEN_PX:
-            return True, world_r               # real size is already big enough
-
-        # inflate so it always covers MIN_SCREEN_PX pixels
+            return True, world_r
         return False, world_r * (MIN_SCREEN_PX / screen_r)
 
 
     # ════════════════════════════════════════════════════════════
     #  Stars
     # ════════════════════════════════════════════════════════════
-    rng  = np.random.default_rng(7)
-    _ST  = rng.standard_normal((2000, 3)).astype(np.float32)
+    rng = np.random.default_rng(7)
+    _ST = rng.standard_normal((2000, 3)).astype(np.float32)
     _ST /= np.linalg.norm(_ST, axis=1, keepdims=True)
     _ST *= span * 80
 
@@ -216,29 +268,27 @@ def animate_interactive(pt_file, sc_states=None):
     # ════════════════════════════════════════════════════════════
     def draw_trail(pts, col):
         M = len(pts)
-        if M < 2: return
+        if M < 2:
+            return
         glLineWidth(1.1)
         glBegin(GL_LINE_STRIP)
         for i, p in enumerate(pts):
-            a = (i / (M - 1)) * 0.6
-            glColor4f(*col, a)
+            glColor4f(*col, (i / (M - 1)) * 0.6)
             glVertex3f(*p)
         glEnd()
 
 
     # ════════════════════════════════════════════════════════════
     #  Picking
-    #  Returns an int k (planet index) or the sentinel 'sc', or None.
     # ════════════════════════════════════════════════════════════
-    def pick(mx, my, H, frame):
+    def pick(mx, my, H, pl_pos, sc_p):
         mv  = (GLdouble * 16)(); glGetDoublev(GL_MODELVIEW_MATRIX,  mv)
         prj = (GLdouble * 16)(); glGetDoublev(GL_PROJECTION_MATRIX, prj)
         vp  = (GLint   *  4)(); glGetIntegerv(GL_VIEWPORT,           vp)
         best, bestd = None, 1e9
 
-        # planets
         for k in range(K):
-            p = pos[frame, k]
+            p = pl_pos[k]
             sx, sy, _ = gluProject(p[0], p[1], p[2], mv, prj, vp)
             sy = H - sy
             ex, ey, _ = gluProject(p[0] + vis_r[k], p[1], p[2], mv, prj, vp)
@@ -247,9 +297,7 @@ def animate_interactive(pt_file, sc_states=None):
             if d < sr * 1.4 and d < bestd:
                 bestd, best = d, k
 
-        # spacecraft
-        if get_sc_pos is not None:
-            sc_p = get_sc_pos(frame)
+        if sc_p is not None:
             sx, sy, _ = gluProject(sc_p[0], sc_p[1], sc_p[2], mv, prj, vp)
             sy = H - sy
             ex, ey, _ = gluProject(sc_p[0] + SC_R, sc_p[1], sc_p[2], mv, prj, vp)
@@ -262,23 +310,19 @@ def animate_interactive(pt_file, sc_states=None):
 
 
     # ════════════════════════════════════════════════════════════
-    #  HUD fonts
+    #  HUD
     # ════════════════════════════════════════════════════════════
     pygame.font.init()
     try:
         Flg = pygame.font.SysFont("monospace", 16, bold=True)
         Fsm = pygame.font.SysFont("monospace", 13)
-    except:
+    except Exception:
         Flg = pygame.font.Font(None, 22)
         Fsm = pygame.font.Font(None, 17)
 
     def _txt(surf, text, pos, font, col=(200, 200, 230)):
         surf.blit(font.render(text, True, col), pos)
 
-
-    # ════════════════════════════════════════════════════════════
-    #  Slider helpers
-    # ════════════════════════════════════════════════════════════
     def slider_rect(H):
         return (14, H - 58, 260, 6)
 
@@ -291,35 +335,18 @@ def animate_interactive(pt_file, sc_states=None):
         SBX, SBY, SBW, SBH = slider_rect(H)
         return SBX <= mx <= SBX + SBW and abs(my - (SBY + SBH // 2)) <= 14
 
-
-    # ════════════════════════════════════════════════════════════
-    #  Locked-body helpers
-    # ════════════════════════════════════════════════════════════
-    def locked_name(locked):
-        if locked is None:    return None
-        if locked == 'sc':    return "spacecraft"
-        return names[locked]
-
-    def locked_pos(locked, frame):
-        """Current world-space position of the locked body."""
-        if locked == 'sc':    return get_sc_pos(frame)
-        return pos[frame, locked].copy()
-
-
-    # ════════════════════════════════════════════════════════════
-    #  HUD draw
-    # ════════════════════════════════════════════════════════════
-    def draw_hud(surf, W, H, frame, playing, locked, speed, dragging_slider):
+    def draw_hud(surf, W, H, frame, playing, locked_name, speed, dragging_slider):
         surf.fill((0, 0, 0, 0))
 
-        _txt(surf, f"FRAME {frame:05d}/{N-1}", (14, 10), Flg, (140, 140, 220))
-        _txt(surf, ("▶ PLAYING" if playing else "⏸ PAUSED"), (14, 32), Fsm,
+        t_phys = sc_times[frame] if sc_times is not None else planet_times[frame]
+        _txt(surf, f"SC FRAME {frame:06d}/{N_frames-1}  t={t_phys:.3f}", (14, 10), Flg, (140, 140, 220))
+        _txt(surf, "▶ PLAYING" if playing else "⏸ PAUSED", (14, 32), Fsm,
              (80, 220, 120) if playing else (220, 120, 80))
-        lname = locked_name(locked)
-        _txt(surf, f"LOCKED  {lname}" if lname else "INERTIAL FRAME",
-             (14, 50), Fsm, (255, 195, 60) if lname else (90, 110, 170))
+        _txt(surf,
+             f"LOCKED  {locked_name}" if locked_name else "INERTIAL FRAME",
+             (14, 50), Fsm,
+             (255, 195, 60) if locked_name else (90, 110, 170))
 
-        # speed slider
         SBX, SBY, SBW, SBH = slider_rect(H)
         pygame.draw.rect(surf, (35, 35, 70), (SBX, SBY, SBW, SBH), border_radius=3)
         t = (math.log(speed) - math.log(SPEED_MIN)) / (math.log(SPEED_MAX) - math.log(SPEED_MIN))
@@ -329,14 +356,13 @@ def animate_interactive(pt_file, sc_states=None):
         hcol = (200, 220, 255) if dragging_slider else (120, 145, 220)
         pygame.draw.circle(surf, hcol, (hx, SBY + SBH // 2), 8)
         _txt(surf, "SPEED", (SBX, SBY - 17), Fsm, (80, 80, 130))
-        _txt(surf, f"{speed:.2f}×", (SBX + SBW + 10, SBY - 5), Fsm, (130, 130, 200))
+        _txt(surf, f"{speed:.1f} sc-frames/frame", (SBX + SBW + 10, SBY - 5), Fsm, (130, 130, 200))
 
-        hints = [
+        for i, h in enumerate(reversed([
             "RIGHT-DRAG orbit   MID-DRAG pan   SCROLL zoom",
             "LEFT-CLICK planet/sc=lock (again=release)   R reset",
-            "SPACE play/pause   ← → step   Q quit",
-        ]
-        for i, h in enumerate(reversed(hints)):
+            "SPACE play/pause   ← → step 1 frame   Q quit",
+        ])):
             _txt(surf, h, (14, H - 78 - i * 17), Fsm, (55, 55, 95))
 
         for k in range(K):
@@ -344,15 +370,13 @@ def animate_interactive(pt_file, sc_states=None):
             pygame.draw.circle(surf, c, (W - 130, 14 + k * 19), 5)
             _txt(surf, names[k], (W - 120, 7 + k * 19), Fsm, c)
 
-        # spacecraft legend entry
-        if get_sc_pos is not None:
-            sc_legend_col = (230, 230, 50)
-            pygame.draw.circle(surf, sc_legend_col, (W - 130, 14 + K * 19), 5)
-            _txt(surf, "spacecraft", (W - 120, 7 + K * 19), Fsm, sc_legend_col)
+        if sc_pos is not None:
+            pygame.draw.circle(surf, (230, 230, 50), (W - 130, 14 + K * 19), 5)
+            _txt(surf, "spacecraft", (W - 120, 7 + K * 19), Fsm, (230, 230, 50))
 
 
     # ════════════════════════════════════════════════════════════
-    #  Main loop
+    #  Window / GL init
     # ════════════════════════════════════════════════════════════
     W, H = 1280, 800
     pygame.init()
@@ -371,27 +395,32 @@ def animate_interactive(pt_file, sc_states=None):
 
     def set_proj(w, h):
         glMatrixMode(GL_PROJECTION); glLoadIdentity()
-        near = max(span * 0.0001, 1e-6)
-        gluPerspective(50, w / max(h, 1), near, span * 300)
+        gluPerspective(50, w / max(h, 1), max(span * 0.0001, 1e-6), span * 300)
         glMatrixMode(GL_MODELVIEW)
     set_proj(W, H)
 
-    frame           = 0
+
+    # ════════════════════════════════════════════════════════════
+    #  Loop state
+    # ════════════════════════════════════════════════════════════
+    frame           = 0       # integer index into sc grid (master clock)
     playing         = False
-    speed           = 1.0
-    sacc            = 0.0
-    locked          = None   # int planet index, 'sc', or None
+    speed           = 1.0     # sc-frames to advance per display frame
+    frame_acc       = 0.0     # sub-frame accumulator
+    locked          = None    # int planet index, 'sc', or None
     drag            = None
     last_m          = (0, 0)
     dragging_slider = False
     clock           = pygame.time.Clock()
 
-    SC_COL = (0.9, 0.9, 0.2)
-    SC_R   = float(radii.min()) * 0.05   # tiny fraction of the smallest planet
 
+    # ════════════════════════════════════════════════════════════
+    #  Main loop
+    # ════════════════════════════════════════════════════════════
     while True:
         clock.tick(60)
 
+        # ── Events ───────────────────────────────────────────
         for ev in pygame.event.get():
             if ev.type == QUIT:
                 pygame.quit(); sys.exit()
@@ -408,9 +437,11 @@ def animate_interactive(pt_file, sc_states=None):
                 elif ev.key == K_SPACE:
                     playing = not playing
                 elif ev.key == K_RIGHT:
-                    playing = False; frame = (frame + 1) % N
+                    playing = False
+                    frame   = min(frame + 1, N_frames - 1)
                 elif ev.key == K_LEFT:
-                    playing = False; frame = (frame - 1) % N
+                    playing = False
+                    frame   = max(frame - 1, 0)
                 elif ev.key == K_r:
                     cam.reset(); locked = None
 
@@ -420,13 +451,8 @@ def animate_interactive(pt_file, sc_states=None):
                         dragging_slider = True
                         speed = speed_from_mouse(ev.pos[0], H)
                     else:
-                        k = pick(ev.pos[0], ev.pos[1], H, frame)
-                        if k is not None:
-                            locked = None if locked == k else k
-                            if locked is not None:
-                                cam.target = locked_pos(locked, frame)
-                        else:
-                            locked = None
+                        k = pick(ev.pos[0], ev.pos[1], H, pl_pos, sc_p)
+                        locked = None if locked == k else k
                 elif ev.button == 3:
                     drag = 'orbit'; last_m = ev.pos
                 elif ev.button == 2:
@@ -452,99 +478,65 @@ def animate_interactive(pt_file, sc_states=None):
                     else:               cam.pan(dx, dy)
                     last_m = ev.pos
 
-        # ── advance ──────────────────────────────────────────
+        # ── Advance ──────────────────────────────────────────
         if playing:
-            sacc  += speed
-            steps  = int(sacc); sacc -= steps
-            frame  = (frame + steps) % N
+            frame_acc += speed
+            steps      = int(frame_acc)
+            frame_acc -= steps
+            frame      = (frame + steps) % N_frames
 
-        # ── keep camera glued to locked body ─────────────────
-        if locked is not None:
-            cam.target = locked_pos(locked, frame)
+        # ── Positions (computed after advance, match the frame being drawn)
+        pl_pos = planet_position(frame)                              # (K, 3)
+        sc_p   = sc_position(frame) if sc_pos is not None else None  # (3,)
 
-        # ── render ───────────────────────────────────────────
+        # ── Camera lock ───────────────────────────────────────
+        if locked == 'sc' and sc_p is not None:
+            cam.target = sc_p.copy()
+        elif isinstance(locked, int):
+            cam.target = pl_pos[locked].copy()
+
+        # ── Render ───────────────────────────────────────────
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         cam.look()
-
         draw_stars()
 
-        # ── planets ──────────────────────────────────────────
+        # ── Planets ──────────────────────────────────────────
+        trail_pl = planet_trail(frame, TRAIL)   # (trail_len, K, 3)
+
         for k in range(K):
-            p   = pos[frame, k]
             col = colors[k]
+            draw_trail(trail_pl[:, k, :], col)
 
-            # trail
-            t0 = max(0, frame - TRAIL)
-            draw_trail(pos[t0:frame + 1, k], col)
-
-            # get screen-space radius
+            p = pl_pos[k]
             use_sphere, draw_r = get_screen_radius(p[0], p[1], p[2], vis_r[k])
             if draw_r is None:
                 continue
 
-            if use_sphere:
-                draw_sphere(p[0], p[1], p[2], draw_r, col, 1.0)
-                glDepthMask(GL_FALSE)
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE)
-                draw_sphere(p[0], p[1], p[2], draw_r * 2.6, col, 0.10)
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-                glDepthMask(GL_TRUE)
-            else:
-                draw_sphere(p[0], p[1], p[2], draw_r, col, 0.75)
-                glDepthMask(GL_FALSE)
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE)
-                draw_sphere(p[0], p[1], p[2], draw_r * 4.0, col, 0.18)
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-                glDepthMask(GL_TRUE)
+            body_alpha = 1.0  if use_sphere else 0.75
+            glow_scale = 2.6  if use_sphere else 4.0
+            glow_alpha = 0.10 if use_sphere else 0.18
+            draw_sphere(p[0], p[1], p[2], draw_r, col, body_alpha)
+            draw_glow(  p[0], p[1], p[2], draw_r, col, glow_scale, glow_alpha)
 
             if locked == k:
-                glPushMatrix()
-                glTranslatef(p[0], p[1], p[2])
-                r = draw_r * 1.8; segs = 56
-                glLineWidth(1.8)
-                glColor4f(1.0, 0.85, 0.2, 0.9)
-                glBegin(GL_LINE_LOOP)
-                for s in range(segs):
-                    a = 2 * math.pi * s / segs
-                    glVertex3f(math.cos(a) * r, 0, math.sin(a) * r)
-                glEnd()
-                glLineWidth(1.0)
-                glPopMatrix()
+                draw_lock_ring(p[0], p[1], p[2], draw_r * 1.8)
 
-        # ── spacecraft ───────────────────────────────────────
-        if get_sc_pos is not None:
-            sc_p = get_sc_pos(frame)
-
-            # trail
-            t0 = max(0, frame - TRAIL)
-            sc_trail = [get_sc_pos(f) for f in range(t0, frame + 1)]
-            draw_trail(sc_trail, SC_COL)
+        # ── Spacecraft ───────────────────────────────────────
+        if sc_p is not None:
+            draw_trail(sc_pos[max(0, frame - TRAIL): frame + 1], SC_COL)
 
             use_sphere, draw_r = get_screen_radius(sc_p[0], sc_p[1], sc_p[2], SC_R)
             if draw_r is not None:
                 draw_sphere(sc_p[0], sc_p[1], sc_p[2], draw_r, SC_COL, 1.0)
-                glDepthMask(GL_FALSE)
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE)
-                draw_sphere(sc_p[0], sc_p[1], sc_p[2], draw_r * 4.0, SC_COL, 0.20)
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-                glDepthMask(GL_TRUE)
-
+                draw_glow(  sc_p[0], sc_p[1], sc_p[2], draw_r, SC_COL, 4.0, 0.20)
                 if locked == 'sc':
-                    glPushMatrix()
-                    glTranslatef(sc_p[0], sc_p[1], sc_p[2])
-                    r = draw_r * 1.8; segs = 56
-                    glLineWidth(1.8)
-                    glColor4f(1.0, 0.85, 0.2, 0.9)
-                    glBegin(GL_LINE_LOOP)
-                    for s in range(segs):
-                        a = 2 * math.pi * s / segs
-                        glVertex3f(math.cos(a) * r, 0, math.sin(a) * r)
-                    glEnd()
-                    glLineWidth(1.0)
-                    glPopMatrix()
+                    draw_lock_ring(sc_p[0], sc_p[1], sc_p[2], draw_r * 1.8)
 
         # ── HUD ──────────────────────────────────────────────
-        draw_hud(hud, W, H, frame, playing, locked, speed, dragging_slider)
+        lname = ("spacecraft"  if locked == 'sc'
+                 else names[locked] if isinstance(locked, int)
+                 else None)
+        draw_hud(hud, W, H, frame, playing, lname, speed, dragging_slider)
         raw = pygame.image.tostring(hud, "RGBA", True)
         glWindowPos2i(0, 0)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)

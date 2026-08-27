@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import torch
+from .utils import get_interp_positions
 
 class BaseGravityModel(ABC):
 
@@ -27,8 +28,7 @@ class QuadraticGravityModel(BaseGravityModel):
         gm.tensors = tensors["states"]
         gm.masses = tensors["masses"]
         gm.radii = tensors["radii"]
-        gm.tspan = tensors["tspan"]
-
+        gm.tspan = list(torch.arange(tensors["tspan"][0], tensors["tspan"][1], step=tensors["tspan"][2]))
         return gm
     
     def set_bodies(self, bodies):
@@ -75,21 +75,14 @@ class QuadraticGravityModel(BaseGravityModel):
     def G(self):
         return self._G
 
+
     def gravity_at(self, pos, t):
         pos.to(dtype=torch.float64)
         if self.online:
             raise Exception("This method can only be used in offline mode!")
 
-        # find index of t in tspan
-        if t < self.tspan[0] or t > self.tspan[1]:
-            raise Exception("t out of simulated range!")
-
-        t = float(t)
-        
-        index = round((t - self.tspan[0]) / self.tspan[-1])
-
         #get all positions
-        poss = self.tensors[index][:, :3]
+        poss = get_interp_positions(self.tensors, t, self.tspan)
 
         #compute displacements
         displ = poss - pos.unsqueeze(0)
