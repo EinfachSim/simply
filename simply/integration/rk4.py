@@ -20,7 +20,7 @@ class RK4Integrator(BaseIntegrator):
         return state
 
     def integrate(self, tstart, tend, dt, state, debug = True):
-        tspan = torch.arange(start =tstart, end=tend, step=dt)
+        tspan = torch.arange(start =tstart, end=tend, step=dt, dtype=torch.float64)
         states = [state]
 
         for t in tspan:

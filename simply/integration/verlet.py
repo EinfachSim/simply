@@ -21,7 +21,7 @@ class VerletIntegrator(BaseIntegrator):
         return torch.hstack([poss_new, vels_new])
 
     def integrate(self, tstart, tend, dt, state, debug = True):
-        tspan = torch.arange(start =tstart, end=tend, step=dt)
+        tspan = torch.arange(start =tstart, end=tend, step=dt, dtype=torch.float64)
         states = [state]
 
         for t in tspan:

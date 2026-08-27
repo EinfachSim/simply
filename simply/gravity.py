@@ -28,7 +28,7 @@ class QuadraticGravityModel(BaseGravityModel):
         gm.tensors = tensors["states"]
         gm.masses = tensors["masses"]
         gm.radii = tensors["radii"]
-        gm.tspan = list(torch.arange(tensors["tspan"][0], tensors["tspan"][1], step=tensors["tspan"][2]))
+        gm.tspan = list(torch.arange(tensors["tspan"][0], tensors["tspan"][1], step=tensors["tspan"][2], dtype=torch.float64))
         return gm
     
     def set_bodies(self, bodies):
