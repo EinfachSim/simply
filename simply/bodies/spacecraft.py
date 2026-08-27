@@ -18,7 +18,7 @@ class SpaceCraftBody(BasePhysicalBody):
         self.vel = sc_dict["vel"]
         self.mass = sc_dict["mass"]
 
-        self._state_vec = torch.Tensor(self.pos + self.vel)
+        self._state_vec = torch.tensor(self.pos + self.vel, dtype=torch.float64)
 
 
     def _parse_integrator(self, integ_str):

@@ -12,7 +12,7 @@ class CelestialBody(BasePhysicalBody):
         self.color = kwargs["color"]
         self.name = name
 
-        self._state_vec = torch.Tensor(self.pos + self.vel)
+        self._state_vec = torch.tensor(self.pos + self.vel, dtype=torch.float64)
 
     def state(self):
         return self._state_vec

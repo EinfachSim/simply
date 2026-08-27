@@ -51,8 +51,8 @@ class Universe:
     def simulate(self, tstart, tend, dt) -> torch.Tensor:
 
         states = self.integrator.integrate(tstart, tend, dt, self.system_state)
-        masses = torch.Tensor([body.mass for body in self.bodies])
-        radii = torch.Tensor([body.radius for body in self.bodies])
+        masses = torch.tensor([body.mass for body in self.bodies], dtype=torch.float64)
+        radii = torch.tensor([body.radius for body in self.bodies], dtype=torch.float64)
         colors = [body.color for body in self.bodies]
         names = [body.name for body in self.bodies]
 

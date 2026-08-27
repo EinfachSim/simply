@@ -38,8 +38,8 @@ class QuadraticGravityModel(BaseGravityModel):
             self.masses.append(body.mass)
             self.radii.append(body.radius)
 
-        self.masses = torch.Tensor(self.masses)
-        self.radii = torch.Tensor(self.radii)
+        self.masses = torch.tensor(self.masses, dtype=torch.float64)
+        self.radii = torch.tensor(self.radii, dtype=torch.float64)
 
     def __call__(self, positions: torch.Tensor) -> torch.Tensor:
         if not self.online:
