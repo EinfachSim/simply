@@ -66,4 +66,19 @@ class Universe:
         }, f="traj.pt")
 
         return states
+
+    #returns the relative velocity (scalar, you decide direction!) needed to orbit
+    # around the CelestialBody of name center_name at the radius wanted_radius
+    def get_circ_orbit_params(self, wanted_radius, center_name="earth"):
+        import numpy as np
+        for body in self.bodies:
+            if body.name == center_name:
+                M = body.mass
+        if not M:
+            raise Exception(f"Could not find celestial body with name {center_name} in universe!")
+
+        
+        v = np.sqrt((self.gravity_model.G()*M)/wanted_radius)
+
+        return v
         

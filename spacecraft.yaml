@@ -1,6 +1,6 @@
 spacecraft:
-pos: [0.999, 0, 0]          # Earth x + r_orbit
-vel: [0, 6.17471, 0]
+pos: [1.0001, 0, 0]          # Earth x + r_orbit
+vel: [0, 6.283185, 1.088823627838779]
 mass: 0
 
 integrator: rk4
