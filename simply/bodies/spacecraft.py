@@ -16,9 +16,12 @@ class SpaceCraftBody(BasePhysicalBody):
 
         self.pos = sc_dict["pos"]
         self.vel = sc_dict["vel"]
-        self.mass = sc_dict["mass"]
+        self.m_dry = sc_dict["m_dry"]
+        self.m_fuel = sc_dict["m_fuel"]
+        self.mass = self.m_dry + self.m_fuel
+        self.v_e = sc_dict["v_e"]
 
-        self._state_vec = torch.tensor(self.pos + self.vel, dtype=torch.float64)
+        self._state_vec = torch.tensor(self.pos + self.vel + [self.mass], dtype=torch.float64)
 
 
     def _parse_integrator(self, integ_str):
@@ -32,15 +35,38 @@ class SpaceCraftBody(BasePhysicalBody):
 
     def state(self):
         return self._state_vec
-    def acceleration(self, pos, t):
+    def acceleration(self, pos, t, mass=None, thrust=None):
         _pos = pos.squeeze(0)
-        return self.gravity_model.gravity_at(_pos, t)
+        acc_g = self.gravity_model.gravity_at(_pos, t)
+
+        acc = acc_g
+        if thrust is not None and mass is not None:
+            acc_thrust = thrust / mass
+            acc += acc_thrust
+        return acc
 
     def derivative(self, state, t=0):
-        pos, vel = state[:, :3], state[:, 3:]
-        acc = self.acceleration(pos, t)
-        return torch.hstack([vel, acc.unsqueeze(0)])
+        pos, vel, mass = state[:, :3], state[:, 3:-1], state[:, -1]
 
-    def simulate(self, tstart, tend, dt) -> torch.Tensor:
+        m_dot = torch.zeros(1)
+        if self.thrust_fn is not None:
+            #Tsiolkovsky mass derivative
+            thrust_vec = self.thrust_fn(t)
+            thrust_mag = thrust_vec.norm()
+            fuel_remaining = mass - self.m_dry
+            m_dot = -thrust_mag / (self.v_e)
+            m_dot = m_dot * (fuel_remaining > 0)
+
+            acc = self.acceleration(pos, t, mass=mass, thrust=thrust_vec)
+        #ballistic case
+        else:
+            acc = self.acceleration(pos, t, mass=mass)
+
+        return torch.hstack([vel, acc.unsqueeze(0), m_dot.unsqueeze(0)])
+
+    def simulate(self, tstart, tend, dt, thrust_fn = None) -> torch.Tensor:
+
+        self.thrust_fn = thrust_fn
+
         states = self.integrator.integrate(tstart, tend, dt, self.state().unsqueeze(0))
         return states.squeeze(1)

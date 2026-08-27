@@ -1,10 +1,13 @@
-spacecraft:
-pos: [1.0001, 0, 0]          # Earth x + r_orbit
-vel: [0, 6.283185, 1.088823627838779]
-mass: 0
+
+pos: [1.49614960e+11, 0.0, 0.0]      # Earth + 14,960 km altitude
+vel: [0.0, 2.978341e+04, 5.16122e+03] # Earth orbital vel + circular orbit vel
+m_dry: 100.0                           # kg (1000 kg dry + 500 kg fuel)
+m_fuel: 500
+v_e: 3500.0                            # m/s (hydrazine thruster)
 
 integrator: rk4
+
 gravity_model:
   type: quadratic
-  G: 39.478418
+  G: 6.674e-11
   tensor_path: traj.pt
