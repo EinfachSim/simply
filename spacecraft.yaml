@@ -1,9 +1,8 @@
-
 pos: [1.49614960e+11, 0.0, 0.0]      # Earth + 14,960 km altitude
-vel: [0.0, 2.978341e+04, 5.16122e+03] # Earth orbital vel + circular orbit vel
+vel: [0.0, 34944.63, 0.0] # Earth orbital vel + circular orbit vel
 m_dry: 100.0                           # kg (1000 kg dry + 500 kg fuel)
 m_fuel: 2000
-v_e: 3500.0                            # m/s (hydrazine thruster)
+v_e: 3500.0   
 
 integrator: rk4
 

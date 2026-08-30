@@ -25,8 +25,7 @@ PyQt5_sip==12.19.0
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
-# Editable Git install with no remote (simply==0.1.0)
--e /Users/simonkoehl/Desktop/learnings/learningsofnumericalsimulation
+-e git+https://github.com/EinfachSim/simply.git@884dfbb585617a5fa0dfaaefe82bf1bf2b01f014#egg=simply
 six==1.17.0
 sympy==1.14.0
 torch==2.13.0

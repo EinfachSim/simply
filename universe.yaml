@@ -30,7 +30,7 @@ celestial_bodies:
   moon:
     pos: [1.499842e+11, 0.0, 0.0]
     vel: [0.0, 3.080442e+04, 0.0]
-    mass: 7.339410e+19
+    mass: 7.339410e+22
     radius: 1.735360e+06
     color: "#aaaaaa"
 

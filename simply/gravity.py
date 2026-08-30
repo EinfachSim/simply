@@ -28,7 +28,7 @@ class QuadraticGravityModel(BaseGravityModel):
         gm.tensors = tensors["states"]
         gm.masses = tensors["masses"]
         gm.radii = tensors["radii"]
-        gm.tspan = list(torch.arange(tensors["tspan"][0], tensors["tspan"][1], step=tensors["tspan"][2], dtype=torch.float64))
+        gm.tspan = torch.arange(tensors["tspan"][0], tensors["tspan"][1], step=tensors["tspan"][2], dtype=torch.float64).tolist()
         return gm
     
     def set_bodies(self, bodies):
@@ -78,7 +78,7 @@ class QuadraticGravityModel(BaseGravityModel):
 
 
     def gravity_at(self, pos, t):
-        pos.to(dtype=torch.float64)
+        pos = pos.to(dtype=torch.float64)
         if self.online:
             raise Exception("This method can only be used in offline mode!")
 
